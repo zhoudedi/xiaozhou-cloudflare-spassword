@@ -1,6 +1,6 @@
 # 密码管理器 Pro · Cloudflare 单文件版（xiaozhou 二开）
 
-> 基于 [`ilikeeu/spassword`](https://github.com/ilikeeu/spassword) 二次开发。把密码管理器的前端与 API 合并在**一个 `_worker.js`** 里，数据存进你自己的 **Cloudflare KV**，登录走 **GitHub OAuth**，全站托管在 Cloudflare，不依赖任何服务器。
+> 基于 [`ilikeeu/spassword`](https://github.com/ilikeeu/spassword) 二次开发。把密码管理器的前端与 API 合并在**一个 `_worker.js`** 里，数据存进你自己的 **Cloudflare KV**，登录走 **OAuth（GitHub / Gitee 可切换，当前用 Gitee）**，全站托管在 Cloudflare，不依赖任何服务器。
 >
 > 本项目站点：<https://mima.fuxicun.top>
 >
@@ -20,7 +20,7 @@
 - [命令行部署（进阶）](#命令行部署进阶)
 - [wrangler.toml 配置说明](#wranglertoml-配置说明)
 - [环境变量一览](#环境变量一览)
-- [OAuth 应用配置（GitHub / Gitee）](#oauth-应用配置github--gitee)
+- [OAuth 应用配置（GitHub / Gitee 详细申请步骤）](#oauth-应用配置github--gitee-详细申请步骤)
 - [自动构建（二选一）](#自动构建二选一)
 - [配套客户端（油猴脚本 / 浏览器扩展）](#配套客户端油猴脚本--浏览器扩展)
 - [日常使用](#日常使用)
@@ -35,11 +35,11 @@
 - **密码历史**：修改密码自动留痕，误改可一键恢复，历史记录可删。
 - **自动填充**（油猴脚本 / Chrome 扩展）：登录页自动识别表单、智能匹配账户、一键填充、密码变更检测。
 - **WebDAV 云备份**：支持坚果云 / NextCloud 等，AES-GCM 加密备份，自动去重恢复。
-- **GitHub OAuth 登录 + 用户隔离**：每个 GitHub 账户的数据按 userId 隔离；可选 `OAUTH_ID` 锁定单一账号访问。
+- **OAuth 登录 + 用户隔离**：支持 GitHub / Gitee 登录（当前用 Gitee），每个账户的数据按 userId 隔离；可选 `OAUTH_ID` 锁定单一账号访问。
 
 ## 部署前须知
 
-- 需要：一个 **Cloudflare 账号**（免费版够用）+ 一个 **GitHub 账号**（创建 OAuth App 用）。
+- 需要：一个 **Cloudflare 账号**（免费版够用）+ 一个 **GitHub 或 Gitee 账号**（创建 OAuth 应用用，国内推荐 Gitee）。
 - 本项目为**单文件 Worker**：`_worker.js` 同时包含前端 HTML 与后端 API，**无需本地构建前端**，`npm run build` 是空脚本。
 - **KV 绑定名固定为 `PASSWORD_KV`**：Worker 代码里写死 `env.PASSWORD_KV`，创建 KV 时命名空间标题可任意，但 `wrangler.toml` 中 `binding` 必须保持 `PASSWORD_KV`。
 - **密钥不入仓库**：`OAUTH_CLIENT_SECRET`、`OAUTH_ID` 等敏感值一律在 Cloudflare 后台以「加密 Secret」设置，不写在任何代码/配置/文档里。`OAUTH_CLIENT_ID` 是公开标识（非密钥），可放 `wrangler.toml [vars]`。
@@ -80,15 +80,14 @@
 
 3. 点 **Commit changes** 提交。
 
-### 第 3 步：创建 GitHub OAuth App
+### 第 3 步：创建 OAuth 应用（GitHub 或 Gitee，二选一）
 
-1. 打开 <https://github.com/settings/developers> → **OAuth Apps → New OAuth App**。
-2. 填写：
-   - **Application name**：`密码管理器 Pro`（随意）
-   - **Homepage URL**：`https://mima.fuxicun.top`（你的站点域名）
-   - **Authorization callback URL**：`https://mima.fuxicun.top/api/oauth/callback`（**必须与 `OAUTH_REDIRECT_URI` 完全一致**）
-3. 创建后复制 **Client ID**（公开标识），并 **Generate a new client secret** 生成 **Client Secret**（只显示一次，立即保存）。
-4. 可选：若要把访问锁定到你一个账号，访问 <https://api.github.com/user> 拿到你的数字 `id`，作为 `OAUTH_ID`。
+本项目支持 GitHub、Gitee 两种登录，**当前使用 Gitee（国内稳定）**。两个平台的详细申请步骤见[「OAuth 应用配置（GitHub / Gitee 详细申请步骤）」](#oauth-应用配置github--gitee-详细申请步骤)：
+
+- **方案 A · GitHub**：<https://github.com/settings/developers> → OAuth Apps → New OAuth App，回调填 `https://mima.fuxicun.top/api/oauth/callback`。
+- **方案 B · Gitee（推荐）**：<https://gitee.com/oauth/applications> → 创建新应用，回调同上，权限勾 `user_info`。
+
+创建后拿到 **Client ID**（写入 `wrangler.toml`）与 **Client Secret**（设为 CF 加密 Secret）。第 4 步的变量按你选的平台填写。
 
 ### 第 4 步：创建 Worker 并配置环境变量与密钥
 
@@ -100,8 +99,8 @@
 
      | 名称 | 值 | 必填 | 说明 |
      | --- | --- | --- | --- |
-     | `OAUTH_CLIENT_SECRET` | 第 3 步生成的 Client Secret | **必填** | GitHub OAuth 应用密钥 |
-     | `OAUTH_ID` | 你的 GitHub 数字 id | 可选 | 设了只允许该账号登录；不设则任何授权用户都可访问 |
+     | `OAUTH_CLIENT_SECRET` | 第 3 步生成的 Client Secret | **必填** | OAuth 应用密钥（GitHub 或 Gitee，与所选平台一致） |
+     | `OAUTH_ID` | 你的平台数字 id | 可选 | 设了只允许该账号登录；不设则任何授权用户都可访问 |
 
      > 加密 Secret 只在添加那一刻显示，之后无法回看——**自己留一份私人备忘**，忘了就重设新值。
 
@@ -227,41 +226,91 @@ enabled = true                               # ⑧ 打开 Worker 日志
 | `OAUTH_CLIENT_ID` | Variable | ✅ | GitHub OAuth App 的 Client ID（公开标识） |
 | `OAUTH_CLIENT_SECRET` | **Secret** | ✅ | GitHub OAuth App 的 Client Secret |
 | `OAUTH_REDIRECT_URI` | Variable | ✅ | `https://你的域名/api/oauth/callback`，与 OAuth App 登记值一致 |
-| `OAUTH_ID` | **Secret** | 可选 | 你的 GitHub 数字 id，设置后仅允许该账号登录 |
+| `OAUTH_ID` | **Secret** | 可选 | 你的平台数字 id（GitHub / Gitee），设置后仅允许该账号登录 |
 
 ---
 
-## OAuth 应用配置（GitHub / Gitee）
+## OAuth 应用配置（GitHub / Gitee 详细申请步骤）
 
-本项目二开已适配 **GitHub** 与 **Gitee（码云）** 两种 OAuth 流程，通过 `OAUTH_PROVIDER` 切换：
+本项目二开已适配 **GitHub** 与 **Gitee（码云）** 两种 OAuth 登录，通过 `OAUTH_PROVIDER` 切换（同一时间用一个）。**本项目当前使用 Gitee**（国内访问稳定）。
 
 | 提供商 | `OAUTH_PROVIDER` | `OAUTH_BASE_URL` | 授权端点 | Token 端点 | 用户端点 | 国内访问 |
 | --- | --- | --- | --- | --- | --- | --- |
 | GitHub | `github` | `https://github.com` | `/login/oauth/authorize` | `/login/oauth/access_token` | `api.github.com/user` | 间歇性，不稳定 |
 | Gitee | `gitee` | `https://gitee.com` | `/oauth/authorize` | `/oauth/token` | `gitee.com/api/v5/user` | **稳定可直连** |
 
-> OAuth 流程中只有「跳转授权页」由用户浏览器访问提供商，换 token 与查用户信息都在 Cloudflare 海外节点完成。因此若你所在网络访问 GitHub 授权页不稳定，**推荐改用 Gitee**——Gitee 的 API V5 参照 GitHub 设计，用户字段（`login`/`name`/`avatar_url`）与本项目映射逻辑完全兼容。
+> 两个平台的 API 都遵循标准 OAuth2，只有「跳转授权页」由用户浏览器访问提供商，换 token 与查用户信息都在 Cloudflare 海外节点完成。所以即使你在国内，用 Gitee 授权页也能全程顺畅。
 
-标准流程（以 GitHub 为例）：
+---
 
-1. `GET /api/oauth/login` → 返回授权 URL，并把 `state` 存入 KV（10 分钟有效）。
-2. 用户在提供商授权后回调 `GET /api/oauth/callback?code=...&state=...` → 校验 state → 换取 token。
-3. 带 token 取用户信息（自动映射 `login→username`、`name→nickname`、`avatar_url→avatar_template`）。
-4. 按 `userId` 隔离数据，会话存 KV，7 天有效。
+### 方案 A：GitHub OAuth App 申请（详细步骤）
 
-### 切换到 Gitee（国内推荐）
+> 适合：能稳定访问 GitHub 的网络环境。GitHub 的 Client ID 形如 `Ov23li...` 或 `Iv1.xxxx`。
 
-1. 打开 <https://gitee.com/oauth/applications/new> 创建应用，回调地址填 `https://mima.fuxicun.top/api/oauth/callback`，拿到 Client ID 与 Client Secret。
-2. 修改 `wrangler.toml [vars]`：
+1. **进入设置页**：浏览器打开 <https://github.com/settings/developers>，左侧点 **OAuth Apps**，再点右上角 **New OAuth App**。
+   - 若提示登录，先登录你的 GitHub 账号。
+2. **填写应用信息**（Register a new OAuth application 表单）：
+   - **Application name**（应用名称）：`xiaozhou-cloudflare-spassword-web`（随意，会显示在授权页上，建议写站点名便于识别）。
+   - **Homepage URL**（主页地址）：`https://mima.fuxicun.top`
+   - **Application description**（应用描述，可选）：`密码管理器 Pro 登录授权`
+   - **Authorization callback URL**（授权回调地址，**最关键**）：`https://mima.fuxicun.top/api/oauth/callback`
+     - ⚠️ 必须与 `wrangler.toml` 的 `OAUTH_REDIRECT_URI` **一字不差**（含 `https://`、路径、无多余斜杠/空格）。不一致时 GitHub 会报 `redirect_uri_mismatch`。
+3. **提交**：点 **Register application**。
+4. **获取凭证**：进入应用详情页：
+   - **Client ID**：直接显示，复制（公开标识，可写入 `wrangler.toml`）。
+   - **Client Secret**：点 **Generate a new client secret** 生成，**只显示一次**，立即复制保存（这是密钥，只设为 CF 加密 Secret，切勿写进仓库）。
+5. **（可选）限制单账号**：访问 <https://api.github.com/user> 拿到你的数字 `id`，设为 `OAUTH_ID` Secret 后只有该账号能登录。
+6. **填入项目**：见下方[「把凭证填入项目」](#把凭证填入项目)。
+
+---
+
+### 方案 B：Gitee OAuth 应用申请（详细步骤，国内推荐）
+
+> 适合：国内网络，稳定可直连。Gitee 的 Client ID / Client Secret 均为 64 位十六进制字符串。官方 OAuth 文档：<https://gitee.com/api/v5/oauth_doc>。
+
+1. **进入第三方应用页**：登录 Gitee 后打开 <https://gitee.com/oauth/applications>（也可从右上角头像 → **设置** → **第三方应用** 进入）。
+2. **创建应用**：点 **创建新应用**（或进入 <https://gitee.com/oauth/applications/new>）。
+3. **填写应用信息**（按官方"创建应用流程"要求填写）：
+   - **应用名称**：`xiaozhou-cloudflare-spassword-web`（授权页显示名，随意）。
+   - **应用主页（根 URL）**：`https://mima.fuxicun.top`
+   - **应用回调地址（Callback URL，最关键）**：`https://mima.fuxicun.top/api/oauth/callback`
+     - ⚠️ 必须与 `OAUTH_REDIRECT_URI` **一字不差**。Gitee 回调时会把 `code` 拼到该地址后。
+   - **应用图标 / 简介**：可选，按喜好填写。
+   - **应用权限（Scopes）**：**至少勾选 `user_info`**（获取用户 id/昵称/头像，本项目登录必需）。本项目不需要仓库、Issues 等权限，**只勾 `user_info` 最小权限即可**。
+4. **提交创建**：点 **创建应用** / **提交**。
+5. **获取凭证**：创建成功后进入应用详情页，会生成并展示 **Client ID** 与 **Client Secret**（Gitee 文档原文称 "Clie**n**t ID"，拼写笔误，实际就是 Client ID）。两者都是 64 位十六进制串：
+   - **Client ID**：复制（公开标识，写入 `wrangler.toml`）。
+   - **Client Secret**：复制（密钥，只设为 CF 加密 Secret，切勿写进仓库）。
+   - 若之后忘了 Secret，可在应用详情页重新生成（会使旧 Secret 失效）。
+6. **（可选）限制单账号**：Gitee 数字 id 可在个人主页链接或调用 API 获取，设为 `OAUTH_ID` 后只有该账号能登录。
+
+---
+
+### 把凭证填入项目（两平台通用）
+
+选好平台、拿到 Client ID / Client Secret 后，按下面三步填入（本项目当前已按方案 B 配好 Gitee）：
+
+1. 修改 `wrangler.toml [vars]`，Platform 对应填：
    ```toml
+   # 方案 A：GitHub
+   OAUTH_PROVIDER = "github"
+   OAUTH_BASE_URL = "https://github.com"
+   OAUTH_CLIENT_ID = "你的 GitHub Client ID"
+
+   # 方案 B：Gitee（国内推荐）
    OAUTH_PROVIDER = "gitee"
    OAUTH_BASE_URL = "https://gitee.com"
    OAUTH_CLIENT_ID = "你的 Gitee Client ID"
    ```
-3. 把 `OAUTH_CLIENT_SECRET` 加密 Secret 更新为 Gitee 的 Client Secret（CF 后台或 `wrangler secret put`）。
-4. push 触发自动部署。域名与回调地址不变。
+   （二选一，不要两组同时写；`OAUTH_REDIRECT_URI` 两平台相同：`https://mima.fuxicun.top/api/oauth/callback`）
+2. 把 `OAUTH_CLIENT_SECRET` 加密 Secret 更新为该平台的 Client Secret：
+   - CF 控制台：Worker → **Settings → Variables and Secrets → Encrypted Secrets → Add/编辑**；或
+   - 命令行：`npx wrangler secret put OAUTH_CLIENT_SECRET`
+3. push 触发自动部署（或本地 `npx wrangler deploy`）。域名与回调地址都不变。
 
-若登录报 404 或 token 交换失败，优先核对：`OAUTH_PROVIDER` 与 `OAUTH_BASE_URL` 匹配、回调 URL 与 OAuth App 登记值完全一致、Client Secret 已作为 Secret 设置并重新部署。
+> 切换平台（如 Gitee↔GitHub）时，务必同时更新 `OAUTH_PROVIDER`、`OAUTH_BASE_URL`、`OAUTH_CLIENT_ID` 三项与 `OAUTH_CLIENT_SECRET` Secret，并重新部署；回调地址 `https://mima.fuxicun.top/api/oauth/callback` 两平台通用，无需改域名。
+
+若登录报 404 / `redirect_uri_mismatch` / token 交换失败，按顺序核对：① `OAUTH_PROVIDER` 与 `OAUTH_BASE_URL` 匹配；② 平台后台登记的回调地址与 `OAUTH_REDIRECT_URI` 完全一致；③ Client Secret 已作为 Secret 设置；④ 改完已重新部署。
 
 ---
 
@@ -303,11 +352,11 @@ enabled = true                               # ⑧ 打开 Worker 日志
 
 ## 常见问题
 
-1. **登录跳 GitHub 后 404 / token 交换失败**：检查 `OAUTH_PROVIDER=github`、`OAUTH_BASE_URL=https://github.com`、回调 URL 与 OAuth App 一致、Client Secret 已设且已重新部署。
+1. **登录跳授权页后 404 / token 交换失败**：检查 `OAUTH_PROVIDER` 与 `OAUTH_BASE_URL` 匹配（GitHub=`github`/`https://github.com`，Gitee=`gitee`/`https://gitee.com`）、平台后台登记的回调 URL 与 `OAUTH_REDIRECT_URI` 完全一致、Client Secret 已设且已重新部署。详细步骤见[OAuth 应用配置](#oauth-应用配置github--gitee-详细申请步骤)。
 2. **页面空白 / 报 `PASSWORD_KV is not defined`**：`wrangler.toml` 的 KV `binding` 必须是 `PASSWORD_KV`，且 id 正确；改完要重新部署。
 3. **改了后台 Secret 不生效**：Secret 改完必须重新部署（push 或 `wrangler deploy`）。
 4. **扩展检测不到账户**：确认扩展里的地址已改为 `mima.fuxicun.top`；在密码管理器页面先登录；多刷新几次。
-5. **想只允许自己访问**：把你的 GitHub 数字 id 设为 `OAUTH_ID` Secret，其他账号登录会被拒绝。
+5. **想只允许自己访问**：把你的平台数字 id（GitHub / Gitee）设为 `OAUTH_ID` Secret，其他账号登录会被拒绝。
 
 排错命令：
 
@@ -321,5 +370,5 @@ curl https://mima.fuxicun.top/api/oauth/login  # 应返回 authUrl（含 github.
 ## 版权与致谢
 
 - 上游项目：[ilikeeu/spassword](https://github.com/ilikeeu/spassword)（MIT）。
-- 本仓库在其基础上做 GitHub OAuth 端点适配与工程化部署改造，保留上游许可声明。
+- 本仓库在其基础上做 GitHub / Gitee OAuth 端点适配与工程化部署改造，保留上游许可声明。
 - 密码数据采用 AES-GCM 加密存储；请妥善保管 OAuth 账号与备份密码。
