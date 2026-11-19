@@ -20,7 +20,7 @@
 - [命令行部署（进阶）](#命令行部署进阶)
 - [wrangler.toml 配置说明](#wranglertoml-配置说明)
 - [环境变量一览](#环境变量一览)
-- [GitHub OAuth 应用配置](#github-oauth-应用配置)
+- [OAuth 应用配置（GitHub / Gitee）](#oauth-应用配置github--gitee)
 - [自动构建（二选一）](#自动构建二选一)
 - [配套客户端（油猴脚本 / 浏览器扩展）](#配套客户端油猴脚本--浏览器扩展)
 - [日常使用](#日常使用)
@@ -222,8 +222,8 @@ enabled = true                               # ⑧ 打开 Worker 日志
 | 变量名 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `PASSWORD_KV` | KV 绑定 | ✅ | 数据库；binding 名固定，id 填你的 KV ID |
-| `OAUTH_PROVIDER` | Variable | 推荐 | `github`（二开新增，触发 GitHub 端点适配；不填时靠 `OAUTH_BASE_URL` 自动识别） |
-| `OAUTH_BASE_URL` | Variable | ✅ | `https://github.com` |
+| `OAUTH_PROVIDER` | Variable | 推荐 | `github` 或 `gitee`（二开新增，触发对应端点适配；不填时靠 `OAUTH_BASE_URL` 自动识别） |
+| `OAUTH_BASE_URL` | Variable | ✅ | GitHub 填 `https://github.com`；Gitee 填 `https://gitee.com` |
 | `OAUTH_CLIENT_ID` | Variable | ✅ | GitHub OAuth App 的 Client ID（公开标识） |
 | `OAUTH_CLIENT_SECRET` | **Secret** | ✅ | GitHub OAuth App 的 Client Secret |
 | `OAUTH_REDIRECT_URI` | Variable | ✅ | `https://你的域名/api/oauth/callback`，与 OAuth App 登记值一致 |
@@ -231,16 +231,37 @@ enabled = true                               # ⑧ 打开 Worker 日志
 
 ---
 
-## GitHub OAuth 应用配置
+## OAuth 应用配置（GitHub / Gitee）
 
-本项目二开已适配 GitHub 标准 OAuth 流程：
+本项目二开已适配 **GitHub** 与 **Gitee（码云）** 两种 OAuth 流程，通过 `OAUTH_PROVIDER` 切换：
 
-1. `GET /api/oauth/login` → 返回 `https://github.com/login/oauth/authorize?client_id=...&redirect_uri=...&state=...`，并把 `state` 存入 KV（10 分钟有效）。
-2. 用户在 GitHub 授权后回调 `GET /api/oauth/callback?code=...&state=...` → 校验 state → 用 `client_id`/`client_secret` 向 `https://github.com/login/oauth/access_token` 换取 token。
-3. 带 token 请求 `https://api.github.com/user` 取用户信息（自动映射 `login→username`、`name→nickname`、`avatar_url→avatar_template`）。
+| 提供商 | `OAUTH_PROVIDER` | `OAUTH_BASE_URL` | 授权端点 | Token 端点 | 用户端点 | 国内访问 |
+| --- | --- | --- | --- | --- | --- | --- |
+| GitHub | `github` | `https://github.com` | `/login/oauth/authorize` | `/login/oauth/access_token` | `api.github.com/user` | 间歇性，不稳定 |
+| Gitee | `gitee` | `https://gitee.com` | `/oauth/authorize` | `/oauth/token` | `gitee.com/api/v5/user` | **稳定可直连** |
+
+> OAuth 流程中只有「跳转授权页」由用户浏览器访问提供商，换 token 与查用户信息都在 Cloudflare 海外节点完成。因此若你所在网络访问 GitHub 授权页不稳定，**推荐改用 Gitee**——Gitee 的 API V5 参照 GitHub 设计，用户字段（`login`/`name`/`avatar_url`）与本项目映射逻辑完全兼容。
+
+标准流程（以 GitHub 为例）：
+
+1. `GET /api/oauth/login` → 返回授权 URL，并把 `state` 存入 KV（10 分钟有效）。
+2. 用户在提供商授权后回调 `GET /api/oauth/callback?code=...&state=...` → 校验 state → 换取 token。
+3. 带 token 取用户信息（自动映射 `login→username`、`name→nickname`、`avatar_url→avatar_template`）。
 4. 按 `userId` 隔离数据，会话存 KV，7 天有效。
 
-若登录报 404 或 token 交换失败，优先核对：`OAUTH_PROVIDER=github`、`OAUTH_BASE_URL=https://github.com`、回调 URL 与 OAuth App 登记值完全一致、Client Secret 已作为 Secret 设置并重新部署。
+### 切换到 Gitee（国内推荐）
+
+1. 打开 <https://gitee.com/oauth/applications/new> 创建应用，回调地址填 `https://mima.fuxicun.top/api/oauth/callback`，拿到 Client ID 与 Client Secret。
+2. 修改 `wrangler.toml [vars]`：
+   ```toml
+   OAUTH_PROVIDER = "gitee"
+   OAUTH_BASE_URL = "https://gitee.com"
+   OAUTH_CLIENT_ID = "你的 Gitee Client ID"
+   ```
+3. 把 `OAUTH_CLIENT_SECRET` 加密 Secret 更新为 Gitee 的 Client Secret（CF 后台或 `wrangler secret put`）。
+4. push 触发自动部署。域名与回调地址不变。
+
+若登录报 404 或 token 交换失败，优先核对：`OAUTH_PROVIDER` 与 `OAUTH_BASE_URL` 匹配、回调 URL 与 OAuth App 登记值完全一致、Client Secret 已作为 Secret 设置并重新部署。
 
 ---
 
