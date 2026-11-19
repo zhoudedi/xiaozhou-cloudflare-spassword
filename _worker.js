@@ -2,28 +2,42 @@
 // 二开适配：支持 GitHub OAuth 标准端点（/login/oauth/authorize、/login/oauth/access_token、api.github.com/user）
 
 // 根据 OAUTH_BASE_URL / OAUTH_PROVIDER 解析各 OAuth 端点。
-// 上游仅支持形如 {base}/oauth2/authorize 的通用端点；GitHub 使用不同路径与独立的 API 域名，
-// 因此当检测到 GitHub 时改用其官方端点，响应字段也做兼容映射。
+// 上游仅支持形如 {base}/oauth2/authorize 的通用端点；各家实际路径不同，故在此集中适配：
+//   - GitHub：/login/oauth/authorize、/login/oauth/access_token、api.github.com/user
+//   - Gitee ：/oauth/authorize、/oauth/token、gitee.com/api/v5/user（国内可直连，字段参照 GitHub）
+//   - generic：上游默认通用端点
 function resolveOAuthEndpoints(env) {
   const base = (env.OAUTH_BASE_URL || '').replace(/\/+$/, '');
   const provider = (env.OAUTH_PROVIDER || '').toLowerCase();
   let hostname = '';
   try { hostname = new URL(base).hostname.toLowerCase(); } catch (e) { hostname = ''; }
   const isGitHub = provider === 'github' || hostname === 'github.com' || hostname.endsWith('.github.com');
+  const isGitee = provider === 'gitee' || hostname === 'gitee.com' || hostname.endsWith('.gitee.com');
 
   if (isGitHub) {
     return {
       provider: 'github',
       authorize: 'https://github.com/login/oauth/authorize',
       token: 'https://github.com/login/oauth/access_token',
-      user: 'https://api.github.com/user'
+      user: 'https://api.github.com/user',
+      credentialsInBody: true
+    };
+  }
+  if (isGitee) {
+    return {
+      provider: 'gitee',
+      authorize: 'https://gitee.com/oauth/authorize',
+      token: 'https://gitee.com/oauth/token',
+      user: 'https://gitee.com/api/v5/user',
+      credentialsInBody: true
     };
   }
   return {
     provider: 'generic',
     authorize: `${base}/oauth2/authorize`,
     token: `${base}/oauth2/token`,
-    user: `${base}/api/user`
+    user: `${base}/api/user`,
+    credentialsInBody: false
   };
 }
 
@@ -350,16 +364,16 @@ async function handleOAuthCallback(request, env, corsHeaders) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        // GitHub 需显式要求 JSON 响应，否则返回 application/x-www-form-urlencoded
-        'Accept': endpoints.provider === 'github' ? 'application/json' : 'application/json',
+        // 显式要求 JSON 响应，避免返回 application/x-www-form-urlencoded
+        'Accept': 'application/json',
         'Authorization': `Basic ${btoa(`${env.OAUTH_CLIENT_ID}:${env.OAUTH_CLIENT_SECRET}`)}`
       },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code: code,
         redirect_uri: env.OAUTH_REDIRECT_URI,
-        // GitHub 要求 client_id / client_secret 放在 body，且不认 Basic 头里的空密钥格式
-        ...(endpoints.provider === 'github' ? {
+        // GitHub / Gitee 都要求 client_id、client_secret 放在 body（Gitee 文档亦建议放 body）
+        ...(endpoints.credentialsInBody ? {
           client_id: env.OAUTH_CLIENT_ID,
           client_secret: env.OAUTH_CLIENT_SECRET
         } : {})
@@ -384,12 +398,18 @@ async function handleOAuthCallback(request, env, corsHeaders) {
     }
     console.log('Token data received:', { access_token: !!tokenData.access_token });
 
-    // 获取用户信息
-    const userResponse = await fetch(endpoints.user, {
+    // 获取用户信息（Gitee 的 /api/v5/user 要求 access_token 作为 query 参数）
+    let userUrl = endpoints.user;
+    if (endpoints.provider === 'gitee') {
+      const u = new URL(endpoints.user);
+      u.searchParams.set('access_token', tokenData.access_token);
+      userUrl = u.toString();
+    }
+    const userResponse = await fetch(userUrl, {
       headers: {
         'Authorization': `Bearer ${tokenData.access_token}`,
         'Accept': 'application/json',
-        // GitHub API 要求 User-Agent
+        // GitHub / Gitee API 均要求 User-Agent
         'User-Agent': 'spassword-worker'
       }
     });
