@@ -28,13 +28,13 @@ id = "74c4b27365f44b1887c201660f6f117b"
 # 敏感值（OAUTH_CLIENT_SECRET / OAUTH_ID）请用 Secret，见 README 第 4 步
 # ------------------------------------------------------------
 [vars]
-OAUTH_PROVIDER = "github"
-OAUTH_BASE_URL = "https://github.com"
+OAUTH_PROVIDER = "gitee"
+OAUTH_BASE_URL = "https://gitee.com"
 OAUTH_REDIRECT_URI = "https://mima.fuxicun.top/api/oauth/callback"
 
 # OAUTH_CLIENT_ID 是公开标识（非密钥），可安全入库。
-# 已配置为 https://mima.fuxicun.top 对应的 GitHub OAuth App Client ID。
-OAUTH_CLIENT_ID = "Ov23liMzSQVOkal0IuNB"
+# 已配置为 https://mima.fuxicun.top 对应的 Gitee OAuth App Client ID。
+OAUTH_CLIENT_ID = "64bce63208daca667a1328333b848991a6999a22cd2e61cb9bf19d192a8ad4f5"
 
 # 观察站（可选）：日志推送，留空即可
 [observability]
