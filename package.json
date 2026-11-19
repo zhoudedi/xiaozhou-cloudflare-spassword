@@ -1,0 +1,15 @@
+{
+  "name": "xiaozhou-cloudflare-spassword",
+  "version": "1.0.0",
+  "private": true,
+  "description": "密码管理器 Pro - Cloudflare Workers + KV + GitHub OAuth 二开版",
+  "scripts": {
+    "build": "echo 'no build step: single-file worker, skip.'",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.60.0"
+  }
+}

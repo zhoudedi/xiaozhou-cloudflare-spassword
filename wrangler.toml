@@ -1,0 +1,41 @@
+# ============================================================
+# xiaozhou-cloudflare-spassword  Worker 配置
+# 项目：密码管理器 Pro（GitHub OAuth + Cloudflare KV 二开版）
+# 站点：https://mima.fuxicun.top
+# ============================================================
+
+# Worker 名称（全局唯一，与 CF 控制台 / Workers Builds 中一致）
+name = "xiaozhou-cloudflare-spassword-web"
+
+# 入口文件：单文件 Worker（ES module 格式，export default）
+main = "_worker.js"
+
+# 兼容日期：保持与 CF 运行环境匹配的稳定版本
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ------------------------------------------------------------
+# KV 命名空间绑定
+# binding 名必须为 PASSWORD_KV（Worker 代码中 env.PASSWORD_KV 硬编码，不可更改）
+# id 为控制台中新建的 xiaozhou-cloudflare-spassword-kv 的 ID
+# ------------------------------------------------------------
+[[kv_namespaces]]
+binding = "PASSWORD_KV"
+id = "74c4b27365f44b1887c201660f6f117b"
+
+# ------------------------------------------------------------
+# 非敏感变量：OAuth 提供商与回调地址（可安全入库）
+# 敏感值（OAUTH_CLIENT_SECRET / OAUTH_ID）请用 Secret，见 README 第 4 步
+# ------------------------------------------------------------
+[vars]
+OAUTH_PROVIDER = "github"
+OAUTH_BASE_URL = "https://github.com"
+OAUTH_REDIRECT_URI = "https://mima.fuxicun.top/api/oauth/callback"
+
+# OAUTH_CLIENT_ID 是公开标识（非密钥），可按需要放在此处。
+# 本仓库已填入一个随机占位值，正式使用前请替换为你自己 GitHub OAuth App 的 Client ID。
+OAUTH_CLIENT_ID = "Iv1.ce420dca9b679885"
+
+# 观察站（可选）：日志推送，留空即可
+[observability]
+enabled = true

@@ -1,0 +1,32 @@
+# 可选：GitHub Actions 自动部署（Workers Builds 之外的备选方案）
+# 注意：与 Cloudflare 控制台的 Workers Builds「Connect to Git」二选一，不要同时启用，
+#       否则一次 push 会触发两次部署。
+#
+# 使用前需在 GitHub 仓库 Settings → Secrets and variables → Actions 新增：
+#   - CLOUDFLARE_API_TOKEN：具有 Workers Scripts 编辑权限的 CF API Token
+#   - CLOUDFLARE_ACCOUNT_ID：CF 账户 ID
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
