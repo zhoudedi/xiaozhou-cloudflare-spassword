@@ -159,6 +159,18 @@ async function handleOAuthLogin(request, env, corsHeaders) {
       });
     }
 
+    // 二开：占位 Client ID 尚未替换为真实 GitHub OAuth App 时，给出明确提示，
+    // 避免用户跳转到 GitHub 后撞到 404 / "Application not found" 而困惑。
+    if (/^Iv1\.ce420dca9b679885$/i.test(env.OAUTH_CLIENT_ID) || /^PLACEHOLDER/i.test(env.OAUTH_CLIENT_ID)) {
+      return new Response(JSON.stringify({
+        error: 'OAuth Client ID 尚未配置',
+        details: '当前使用的是占位 Client ID。请先在 https://github.com/settings/developers 创建 OAuth App（回调地址填 ' + env.OAUTH_REDIRECT_URI + '），把真实 Client ID 填入 wrangler.toml 的 OAUTH_CLIENT_ID，并将 Client Secret 设为 Worker 加密 Secret 后重新部署。'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+    }
+
     const state = generateRandomString(32);
 
     // 构建授权URL（二开：按 OAuth 提供商解析端点，兼容 GitHub）
