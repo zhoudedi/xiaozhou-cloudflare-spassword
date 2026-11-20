@@ -986,10 +986,18 @@ async function handlePasswords(request, env, corsHeaders) {
               const data = await env.PASSWORD_KV.get(key.name);
               if (data) {
                 const passwordData = JSON.parse(data);
-                passwords.push({
+                const masked = {
                   ...passwordData,
                   password: '••••••••'
-                });
+                };
+                // 二开：秘钥类型条目的每个 value 也做脱敏（保持 label 可见）
+                if (Array.isArray(passwordData.secrets)) {
+                  masked.secrets = passwordData.secrets.map(s => ({
+                    ...s,
+                    value: '••••••••'
+                  }));
+                }
+                passwords.push(masked);
               }
             } catch (error) {
               console.error('解析密码数据失败:', error);
@@ -1010,11 +1018,13 @@ async function handlePasswords(request, env, corsHeaders) {
           
           if (search) {
             const searchLower = search.toLowerCase();
-            filteredPasswords = filteredPasswords.filter(p => 
-              p.siteName.toLowerCase().includes(searchLower) ||
-              p.username.toLowerCase().includes(searchLower) ||
+            filteredPasswords = filteredPasswords.filter(p =>
+              (p.siteName || '').toLowerCase().includes(searchLower) ||
+              (p.username || '').toLowerCase().includes(searchLower) ||
               (p.notes && p.notes.toLowerCase().includes(searchLower)) ||
-              (p.url && p.url.toLowerCase().includes(searchLower))
+              (p.url && p.url.toLowerCase().includes(searchLower)) ||
+              // 二开：秘钥条目的 label 也纳入搜索
+              (Array.isArray(p.secrets) && p.secrets.some(s => (s.label || '').toLowerCase().includes(searchLower)))
             );
           }
           
@@ -1115,10 +1125,20 @@ async function handlePasswords(request, env, corsHeaders) {
         }
         
         newPassword.password = await encryptPassword(newPassword.password, userId);
+        // 二开：秘钥类型条目的 value 逐个加密
+        if (newPassword.entryType === 'secret' && Array.isArray(newPassword.secrets)) {
+          newPassword.secrets = await encryptSecrets(newPassword.secrets, userId);
+        }
         
         await env.PASSWORD_KV.put(`password_${userId}_${newPassword.id}`, JSON.stringify(newPassword));
         
-        const responseData = { ...newPassword, password: '••••••••' };
+        const responseData = {
+          ...newPassword,
+          password: '••••••••',
+          secrets: Array.isArray(newPassword.secrets)
+            ? newPassword.secrets.map(s => ({ ...s, value: '••••••••' }))
+            : undefined
+        };
         
         return new Response(JSON.stringify(responseData), {
           headers: { 'Content-Type': 'application/json', ...corsHeaders }
@@ -1168,10 +1188,37 @@ async function handlePasswords(request, env, corsHeaders) {
           
           updatedPassword.password = newEncryptedPassword;
         }
+
+        // 二开：秘钥类型条目处理——占位符表示保留原密文，新值则加密
+        if (Array.isArray(updateData.secrets)) {
+          const oldSecrets = Array.isArray(existingPasswordData.secrets) ? existingPasswordData.secrets : [];
+          const oldById = {};
+          oldSecrets.forEach(s => { if (s.id) oldById[s.id] = s; });
+          const processed = [];
+          for (const s of updateData.secrets) {
+            if (s.value === '••••••••' && s.id && oldById[s.id]) {
+              // 保持原密文不变
+              processed.push({ ...oldById[s.id], label: s.label });
+            } else {
+              processed.push({
+                ...s,
+                id: s.id || generateId(),
+                value: s.value ? await encryptPassword(String(s.value), userId) : ''
+              });
+            }
+          }
+          updatedPassword.secrets = processed;
+        }
         
         await env.PASSWORD_KV.put(`password_${userId}_${id}`, JSON.stringify(updatedPassword));
         
-        const updatedResponseData = { ...updatedPassword, password: '••••••••' };
+        const updatedResponseData = {
+          ...updatedPassword,
+          password: '••••••••',
+          secrets: Array.isArray(updatedPassword.secrets)
+            ? updatedPassword.secrets.map(s => ({ ...s, value: '••••••••' }))
+            : undefined
+        };
         
         return new Response(JSON.stringify(updatedResponseData), {
           headers: { 'Content-Type': 'application/json', ...corsHeaders }
@@ -1406,8 +1453,12 @@ async function getActualPassword(request, env, corsHeaders) {
 
     const passwordData = JSON.parse(password);
     const decryptedPassword = await decryptPassword(passwordData.password, userId);
+    // 二开：返回解密后的秘钥条目
+    const decryptedSecrets = Array.isArray(passwordData.secrets)
+      ? await decryptSecrets(passwordData.secrets, userId)
+      : [];
 
-    return new Response(JSON.stringify({ password: decryptedPassword }), {
+    return new Response(JSON.stringify({ password: decryptedPassword, secrets: decryptedSecrets }), {
       headers: { 'Content-Type': 'application/json', ...corsHeaders }
     });
   } catch (error) {
@@ -2318,6 +2369,32 @@ async function decryptPassword(encryptedPassword, userId) {
   }
 }
 
+// 二开：批量加密/解密秘钥条目的 value（复用与主密码相同的 AES-GCM 方案）
+async function encryptSecrets(secrets, userId) {
+  if (!Array.isArray(secrets)) return secrets;
+  const result = [];
+  for (const s of secrets) {
+    result.push({
+      ...s,
+      id: s.id || generateId(),
+      value: s.value ? await encryptPassword(String(s.value), userId) : ''
+    });
+  }
+  return result;
+}
+
+async function decryptSecrets(secrets, userId) {
+  if (!Array.isArray(secrets)) return secrets;
+  const result = [];
+  for (const s of secrets) {
+    result.push({
+      ...s,
+      value: s.value ? await decryptPassword(s.value, userId) : ''
+    });
+  }
+  return result;
+}
+
 async function encryptExportData(data, password) {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -2796,6 +2873,128 @@ function getHTML5() {
             right: 0;
             height: 4px;
             background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+        }
+
+        /* 二开：记录类型切换器 */
+        .entry-type-switch {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.35rem;
+            background: rgba(99, 102, 241, 0.08);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+        }
+        .entry-type-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.7rem 1rem;
+            border: none;
+            border-radius: 9px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .entry-type-btn:hover { color: var(--primary-color); }
+        .entry-type-btn.active {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: #fff;
+            box-shadow: var(--shadow-md);
+        }
+
+        /* 二开：秘钥行编辑区 */
+        .secrets-editor { margin-bottom: 1.25rem; }
+        .secrets-editor-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+        }
+        .secrets-editor-header label {
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+        }
+        .secret-row {
+            display: grid;
+            grid-template-columns: 1fr 1.4fr auto;
+            gap: 0.6rem;
+            align-items: center;
+            padding: 0.6rem;
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(99, 102, 241, 0.15);
+            border-radius: 10px;
+            margin-bottom: 0.6rem;
+        }
+        .secret-row input.form-control { margin: 0; }
+        .secret-row .remove-secret {
+            flex: 0 0 auto;
+            width: 2.4rem;
+            height: 2.4rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            border-radius: 8px;
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger-color);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .secret-row .remove-secret:hover { background: var(--danger-color); color: #fff; }
+        .secrets-empty-tip {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            padding: 0.5rem 0;
+        }
+
+        /* 二开：卡片内秘钥条目展示 */
+        .secret-entry {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.55rem 0.7rem;
+            background: rgba(99, 102, 241, 0.06);
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+        }
+        .secret-entry-info { flex: 1; min-width: 0; }
+        .secret-entry-label {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.15rem;
+        }
+        .secret-entry-value {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            word-break: break-all;
+            overflow-wrap: anywhere;
+        }
+        .secret-entry-actions { display: flex; gap: 0.3rem; flex: 0 0 auto; }
+        .secret-entry-actions button {
+            width: 2rem; height: 2rem;
+            display: flex; align-items: center; justify-content: center;
+            border: none; border-radius: 6px;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary-color);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .secret-entry-actions button:hover { background: var(--primary-color); color: #fff; }
+        .secret-type-badge {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #fff;
+            background: linear-gradient(135deg, #8b5cf6, #6366f1);
         }
 
         .password-card:hover {
@@ -3609,10 +3808,22 @@ function getHTML5() {
                 </div>
                 
                 <form id="passwordForm">
-                    <div class="form-group">
-                        <label for="siteName">🌐 网站名称 *</label>
-                        <input type="text" id="siteName" class="form-control" required placeholder="例如：GitHub、Gmail" autocomplete="off">
+                    <!-- 二开：记录类型切换 -->
+                    <div class="entry-type-switch">
+                        <button type="button" class="entry-type-btn active" id="typeBtnPassword" onclick="setEntryType('password')">
+                            <i class="fas fa-user-lock"></i> 账号密码
+                        </button>
+                        <button type="button" class="entry-type-btn" id="typeBtnSecret" onclick="setEntryType('secret')">
+                            <i class="fas fa-key"></i> 秘钥集合
+                        </button>
                     </div>
+                    <div class="form-group">
+                        <label for="siteName">🌐 网站/服务名称 *</label>
+                        <input type="text" id="siteName" class="form-control" required placeholder="例如：GitHub、OpenAI、我的服务器" autocomplete="off">
+                    </div>
+
+                    <!-- 账号密码类型专属字段 -->
+                    <div id="passwordFields">
                     <div class="form-group">
                         <label for="username">👤 用户名/邮箱 *</label>
                         <input type="text" id="username" class="form-control" required placeholder="your@email.com" autocomplete="username">
@@ -3661,6 +3872,21 @@ function getHTML5() {
                             <i class="fas fa-magic"></i> 生成强密码
                         </button>
                     </fieldset>
+                    </div><!-- /passwordFields -->
+
+                    <!-- 二开：秘钥集合类型专属字段 -->
+                    <div id="secretFields" style="display: none;">
+                        <div class="secrets-editor">
+                            <div class="secrets-editor-header">
+                                <label><i class="fas fa-key"></i> 秘钥条目（可添加多个）</label>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="addSecretRow()">
+                                    <i class="fas fa-plus"></i> 添加秘钥
+                                </button>
+                            </div>
+                            <div id="secretsRows"></div>
+                            <p class="secrets-empty-tip" id="secretsEmptyTip">还没有秘钥条目，点右上角「添加秘钥」新增一行（如 UUID、API Key、Token 等）。</p>
+                        </div>
+                    </div>
 
                     <div class="form-group">
                         <label for="category">📁 选择分类</label>
@@ -3809,6 +4035,7 @@ function getHTML5() {
         let selectedFile = null;
         let currentTab = 'passwords';
         let currentPasswordId = null; // 当前查看历史记录的密码ID
+        let currentEntryType = 'password'; // 二开：当前表单记录类型 password | secret
         
         // 分页相关变量
         let currentPage = 1;
@@ -3816,6 +4043,116 @@ function getHTML5() {
         let pageLimit = 50;
         let searchQuery = '';
         let categoryFilter = '';
+
+        // ===== 二开：记录类型与秘钥条目管理 =====
+        function setEntryType(type) {
+            currentEntryType = type;
+            const isSecret = type === 'secret';
+            document.getElementById('typeBtnPassword').classList.toggle('active', !isSecret);
+            document.getElementById('typeBtnSecret').classList.toggle('active', isSecret);
+            document.getElementById('passwordFields').style.display = isSecret ? 'none' : '';
+            document.getElementById('secretFields').style.display = isSecret ? '' : 'none';
+            // 账号密码必填标记联动
+            const siteLabel = document.querySelector('label[for="siteName"]');
+            document.getElementById('password').required = !isSecret && !editingPasswordId;
+            const userInput = document.getElementById('username');
+            userInput.required = !isSecret;
+        }
+
+        function addSecretRow(label = '', value = '', id = '') {
+            const container = document.getElementById('secretsRows');
+            const row = document.createElement('div');
+            row.className = 'secret-row';
+            row.dataset.secretId = id || '';
+            row.innerHTML = \`
+                <input type="text" class="form-control secret-label" placeholder="名称，如 UUID / API Key" value="\${label.replace(/"/g, '&quot;')}">
+                <input type="text" class="form-control secret-value" placeholder="对应的值" value="\${value.replace(/"/g, '&quot;')}">
+                <button type="button" class="remove-secret" onclick="removeSecretRow(this)" title="删除此条目">
+                    <i class="fas fa-trash"></i>
+                </button>
+            \`;
+            container.appendChild(row);
+            updateSecretsEmptyTip();
+        }
+
+        function removeSecretRow(btn) {
+            btn.closest('.secret-row').remove();
+            updateSecretsEmptyTip();
+        }
+
+        function updateSecretsEmptyTip() {
+            const tip = document.getElementById('secretsEmptyTip');
+            const count = document.querySelectorAll('#secretsRows .secret-row').length;
+            if (tip) tip.style.display = count > 0 ? 'none' : 'block';
+        }
+
+        function clearSecretRows() {
+            document.getElementById('secretsRows').innerHTML = '';
+            updateSecretsEmptyTip();
+        }
+
+        function collectSecrets() {
+            const rows = document.querySelectorAll('#secretsRows .secret-row');
+            const result = [];
+            rows.forEach(row => {
+                const label = row.querySelector('.secret-label').value.trim();
+                const value = row.querySelector('.secret-value').value;
+                if (label || value) {
+                    result.push({
+                        id: row.dataset.secretId || '',
+                        label: label || '秘钥',
+                        value: value
+                    });
+                }
+            });
+            return result;
+        }
+
+        // 显示/隐藏秘钥值（按需从服务端 reveal）
+        async function toggleSecretDisplay(passwordId, secretId) {
+            const el = document.getElementById(\`secret-val-\${secretId}\`);
+            if (!el) return;
+            if (el.dataset.revealed === 'true') {
+                el.textContent = '••••••••';
+                el.dataset.revealed = 'false';
+                return;
+            }
+            try {
+                const res = await fetch(\`/api/passwords/\${passwordId}/reveal\`, {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                if (!res.ok) throw new Error('reveal failed');
+                const data = await res.json();
+                const found = (data.secrets || []).find(s => s.id === secretId);
+                if (found) {
+                    el.textContent = found.value;
+                    el.dataset.revealed = 'true';
+                } else {
+                    showNotification('未找到该秘钥', 'error');
+                }
+            } catch (error) {
+                showNotification('显示失败', 'error');
+            }
+        }
+
+        async function copySecret(passwordId, secretId) {
+            try {
+                const res = await fetch(\`/api/passwords/\${passwordId}/reveal\`, {
+                    headers: { 'Authorization': 'Bearer ' + authToken }
+                });
+                if (!res.ok) throw new Error('reveal failed');
+                const data = await res.json();
+                const found = (data.secrets || []).find(s => s.id === secretId);
+                if (found) {
+                    await navigator.clipboard.writeText(found.value);
+                    showNotification('秘钥已复制 ✅');
+                } else {
+                    showNotification('未找到该秘钥', 'error');
+                }
+            } catch (error) {
+                showNotification('复制失败', 'error');
+            }
+        }
 
         // 创建粒子背景
         function createParticles() {
@@ -4271,6 +4608,55 @@ function getHTML5() {
             }
             
             grid.innerHTML = passwords.map(password => \`
+                \${password.entryType === 'secret' ? \`
+                <article class="password-card">
+                    <header class="password-header">
+                        <div class="site-icon" style="background: linear-gradient(135deg, #8b5cf6, #6366f1);">
+                            <i class="fas fa-key"></i>
+                        </div>
+                        <div class="password-meta">
+                            <h3>\${password.siteName}</h3>
+                            <span class="secret-type-badge" style="margin-right: 0.4rem;">🔑 秘钥</span>
+                            \${password.category ? \`<span class="category-badge">\${password.category}</span>\` : ''}
+                        </div>
+                    </header>
+
+                    \${(password.secrets || []).map(s => \`
+                        <div class="secret-entry">
+                            <div class="secret-entry-info">
+                                <div class="secret-entry-label"><i class="fas fa-tag"></i> \${s.label || '秘钥'}</div>
+                                <div class="secret-entry-value" id="secret-val-\${s.id}" data-revealed="false">••••••••</div>
+                            </div>
+                            <div class="secret-entry-actions">
+                                <button type="button" onclick="toggleSecretDisplay('\${password.id}', '\${s.id}')" title="显示/隐藏"><i class="fas fa-eye"></i></button>
+                                <button type="button" onclick="copySecret('\${password.id}', '\${s.id}')" title="复制"><i class="fas fa-copy"></i></button>
+                            </div>
+                        </div>
+                    \`).join('')}
+
+                    \${password.url ? \`
+                        <div class="password-field">
+                            <label>🔗 网址</label>
+                            <div class="value"><a href="\${password.url}" target="_blank" rel="noopener noreferrer">\${password.url}</a></div>
+                        </div>
+                    \` : ''}
+                    \${password.notes ? \`
+                        <div class="password-field">
+                            <label>📝 备注</label>
+                            <div class="value">\${password.notes}</div>
+                        </div>
+                    \` : ''}
+
+                    <footer class="password-actions">
+                        <button class="btn btn-warning btn-sm" onclick="editPassword('\${password.id}')" type="button" title="编辑">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deletePassword('\${password.id}')" type="button" title="删除">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </footer>
+                </article>
+                \` : \`
                 <article class="password-card">
                     <header class="password-header">
                         <div class="site-icon">
@@ -4284,7 +4670,7 @@ function getHTML5() {
                     
                     <div class="password-field">
                         <label>👤 用户名</label>
-                        <div class="value">\${password.username}</div>
+                        <div class="value">\${password.username || ''}</div>
                     </div>
                     
                     <div class="password-field">
@@ -4324,6 +4710,7 @@ function getHTML5() {
                         </button>
                     </footer>
                 </article>
+                \`}
             \`).join('');
         }
 
@@ -4658,11 +5045,19 @@ function getHTML5() {
             editingPasswordId = passwordId;
             
             document.getElementById('siteName').value = password.siteName;
-            document.getElementById('username').value = password.username;
+            document.getElementById('username').value = password.username || '';
             document.getElementById('password').value = ''; // 编辑时密码留空
             document.getElementById('category').value = password.category || '';
             document.getElementById('url').value = password.url || '';
             document.getElementById('notes').value = password.notes || '';
+
+            // 二开：还原记录类型与秘钥条目
+            const type = password.entryType === 'secret' ? 'secret' : 'password';
+            setEntryType(type);
+            clearSecretRows();
+            if (type === 'secret' && Array.isArray(password.secrets)) {
+                password.secrets.forEach(s => addSecretRow(s.label || '', '••••••••', s.id || ''));
+            }
             
             // 隐藏重复警告
             hideDuplicateWarning();
@@ -4731,12 +5126,20 @@ function getHTML5() {
                 username: document.getElementById('username').value,
                 category: document.getElementById('category').value,
                 url: document.getElementById('url').value,
-                notes: document.getElementById('notes').value
+                notes: document.getElementById('notes').value,
+                entryType: currentEntryType
             };
-            
-            // 只有在密码字段有值时才包含密码
+
+            // 只有在密码字段有值时才包含密码（秘钥类型始终带空密码）
             const passwordValue = document.getElementById('password').value;
-            if (passwordValue || !editingPasswordId) {
+            if (currentEntryType === 'secret') {
+                formData.password = passwordValue || '';
+                formData.secrets = collectSecrets();
+                if (formData.secrets.length === 0) {
+                    showNotification('请至少添加一个秘钥条目', 'warning');
+                    return;
+                }
+            } else if (passwordValue || !editingPasswordId) {
                 formData.password = passwordValue;
             }
             
@@ -4783,6 +5186,9 @@ function getHTML5() {
             document.getElementById('lengthValue').textContent = '16';
             editingPasswordId = null;
             hideDuplicateWarning();
+            // 二开：重置类型与秘钥行
+            clearSecretRows();
+            setEntryType('password');
             
             // 重置UI状态
             updateEditModeUI();
