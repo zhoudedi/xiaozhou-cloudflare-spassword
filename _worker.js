@@ -3704,11 +3704,11 @@ function getHTML5() {
                 开始使用 OAuth 登录
             </button>
             
-            <!-- GitHub 开源仓库链接 -->
+            <!-- 二开仓库链接 -->
             <div class="github-link">
-                <a href="https://github.com/ilikeeu/spassword" target="_blank" rel="noopener noreferrer">
+                <a href="https://github.com/zhoudedi/xiaozhou-cloudflare-spassword" target="_blank" rel="noopener noreferrer">
                     <i class="fab fa-github"></i>
-                    Spassword - 你的私人密码管家
+                    xiaozhou-cloudflare-spassword - 你的私人密码管家
                 </a>
             </div>
         </article>
